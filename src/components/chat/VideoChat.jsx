@@ -34,17 +34,19 @@ const VideoChat = ({ mode }) => {
   }, []); 
   
   useEffect(() => {
-    // Only start video call if we have a local stream and we're matched with someone
     if (localStream && matchDetails && matchDetails.partnerId) { 
-      console.log("starting video call")
+      console.log("starting video call");
       startVideoCall(matchDetails.partnerId, localStream, remoteVideoRef.current);
       setIsCallActive(true);
     }
-  }, [localStream, matchDetails, startVideoCall]); // Added proper dependencies
+  }, [localStream, matchDetails]); 
 
   const initLocalStream = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true }); 
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: true, 
+        audio: true 
+      }); 
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = stream;
       }
@@ -94,7 +96,11 @@ const VideoChat = ({ mode }) => {
   }; 
   
   const handleSkipMatch = () => { 
-    next(mode);
+    if (isCallActive) {
+      endVideoCall(); // End current video call
+      setIsCallActive(false);
+    }
+    next(mode); // Find next match
   };
 
   const selectGender = (gender) => {
@@ -141,14 +147,13 @@ const VideoChat = ({ mode }) => {
                 {isConnecting ? "Finding someone to chat with..." : "Waiting for match..."}
               </div>
             )}
-           <video
-            ref={remoteVideoRef}
-            autoPlay
-            playsInline
-            muted={false}  // 👈 Do NOT mute remote video
-          
+            <video
+              ref={remoteVideoRef}
+              autoPlay
+              playsInline
+              className="w-full h-full object-cover"
             />
-          </div> 
+          </div>
           {/* Local Video */}
           <div className="flex-1 bg-gray-800 flex items-center justify-center relative rounded-md overflow-hidden">
             <video 

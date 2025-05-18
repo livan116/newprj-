@@ -1,72 +1,89 @@
 const textwaitingUsers = new Map();  
-const videowaitingUsers=new Map();
-
+const videowaitingUsers = new Map();
 const activePairs = new Map();
 const activeVideoCalls = new Set();
 const pastSocketsMap = new Map();
-const SOCKET_RETENTION_TIME = 3 * 60 * 1000;
+const SOCKET_RETENTION_TIME = 3 * 60 * 1000; // 3 minutes
+
 export default (io, socket) => {
   socket.on('user-details', ({ gender, interest, name, mode}) => { 
-    if(mode==="text"){
-    socket.data = { gender, interest, };
-    console.log(`User ${socket.id} joined with gender: ${gender}, interest: ${interest} for chat`);
-    cleanupUserConnections(socket.id); 
-    for (let [id, otherSocket] of textwaitingUsers) {
-      if (id === socket.id) continue;
-      if (
-        otherSocket.data &&
-        otherSocket.data.gender === interest &&
-        otherSocket.data.interest === gender  
-      ) 
-      {
-        console.log("user deleted from waiting list: ",id);
-        textwaitingUsers.delete(id); 
+    if(mode === "text") {
+      socket.data = { gender, interest };
+      console.log(`User ${socket.id} joined with gender: ${gender}, interest: ${interest} for chat`);
+      cleanupUserConnections(socket.id); 
+      
+      for (let [id, otherSocket] of textwaitingUsers) {
+        if (id === socket.id) continue;
         
-        const matchedSocket = io.sockets.sockets.get(id);
-        if (matchedSocket) {
-          matchedSocket.emit('match-found', { matched: true, socketId: socket.id });
-          socket.emit('match-found', { matched: true, socketId: matchedSocket.id });
-          activePairs.set(socket.id, matchedSocket.id);
-          activePairs.set(matchedSocket.id, socket.id); 
+        // Check if users haven't chatted recently
+        if (hasPastConnection(socket.id, id)) continue;
+        
+        if (
+          otherSocket.data &&
+          otherSocket.data.gender === interest &&
+          otherSocket.data.interest === gender  
+        ) {
+          console.log("user deleted from waiting list: ", id);
+          textwaitingUsers.delete(id); 
           
-          console.log(`🎯 Match found: ${socket.id} <--> ${matchedSocket.id}`);
+          const matchedSocket = io.sockets.sockets.get(id);
+          if (matchedSocket) {
+            matchedSocket.emit('match-found', { matched: true, socketId: socket.id });
+            socket.emit('match-found', { matched: true, socketId: matchedSocket.id });
+            activePairs.set(socket.id, matchedSocket.id);
+            activePairs.set(matchedSocket.id, socket.id); 
+            
+            // Add to past connections
+            addPastConnection(socket.id, matchedSocket.id);
+            addPastConnection(matchedSocket.id, socket.id);
+            
+            console.log(`🎯 Match found: ${socket.id} <--> ${matchedSocket.id}`);
+          }
+          return;
         }
-        return;
       }
-    }
-    textwaitingUsers.set(socket.id, socket);
-    console.log(`User ${socket.id} added to waiting list.`); 
+      textwaitingUsers.set(socket.id, socket);
+      console.log(`User ${socket.id} added to waiting list.`); 
     } 
-    else{ 
-      socket.data = { gender, interest, };
-    console.log(`User ${socket.id} joined with gender: ${gender}, interest: ${interest} for video`);
-    cleanupUserConnections(socket.id); 
-    for (let [id, otherSocket] of videowaitingUsers) {
-      if (id === socket.id) continue;
-      if (
-        otherSocket.data &&
-        otherSocket.data.gender === interest &&
-        otherSocket.data.interest === gender  
-      ) 
-      {
-        console.log("user deleted from waiting list: ",id);
-        videowaitingUsers.delete(id); 
+    else { 
+      socket.data = { gender, interest };
+      console.log(`User ${socket.id} joined with gender: ${gender}, interest: ${interest} for video`);
+      cleanupUserConnections(socket.id); 
+      
+      for (let [id, otherSocket] of videowaitingUsers) {
+        if (id === socket.id) continue;
         
-        const matchedSocket = io.sockets.sockets.get(id);
-        if (matchedSocket) {
-          matchedSocket.emit('match-found', { matched: true, socketId: socket.id });
-          socket.emit('match-found', { matched: true, socketId: matchedSocket.id });
-          activePairs.set(socket.id, matchedSocket.id);
-          activePairs.set(matchedSocket.id, socket.id); 
-          activeVideoCalls.add(socket.id, matchedSocket.id);
-          activeVideoCalls.add(matchedSocket.id, socket.id);
-          console.log(`🎯 Match found: ${socket.id} <--> ${matchedSocket.id}`);
+        // Check if users haven't chatted recently
+        if (hasPastConnection(socket.id, id)) continue;
+        
+        if (
+          otherSocket.data &&
+          otherSocket.data.gender === interest &&
+          otherSocket.data.interest === gender  
+        ) {
+          console.log("user deleted from waiting list: ", id);
+          videowaitingUsers.delete(id); 
+          
+          const matchedSocket = io.sockets.sockets.get(id);
+          if (matchedSocket) {
+            matchedSocket.emit('match-found', { matched: true, socketId: socket.id });
+            socket.emit('match-found', { matched: true, socketId: matchedSocket.id });
+            activePairs.set(socket.id, matchedSocket.id);
+            activePairs.set(matchedSocket.id, socket.id); 
+            activeVideoCalls.add(`${socket.id}-${matchedSocket.id}`);
+            activeVideoCalls.add(`${matchedSocket.id}-${socket.id}`);
+            
+            // Add to past connections
+            addPastConnection(socket.id, matchedSocket.id);
+            addPastConnection(matchedSocket.id, socket.id);
+            
+            console.log(`🎯 Match found: ${socket.id} <--> ${matchedSocket.id}`);
+          }
+          return;
         }
-        return;
       }
-    }
-    videowaitingUsers.set(socket.id, socket);
-    console.log(`User ${socket.id} added to waiting list.`); 
+      videowaitingUsers.set(socket.id, socket);
+      console.log(`User ${socket.id} added to waiting list.`); 
     }
   });
 
@@ -77,57 +94,63 @@ export default (io, socket) => {
     }
   });
 
-  socket.on('disconnect-chat', (partnerSocketId,mode)=> { 
+  socket.on('disconnect-chat', (partnerSocketId, mode) => { 
     console.log(mode);
     const partnerSocket = io.sockets.sockets.get(partnerSocketId); 
-    if(mode==="video"){
-    if (activeVideoCalls.has(`${socket.id}-${partnerSocketId}`) ||
-        activeVideoCalls.has(`${partnerSocketId}-${socket.id}`)) {
-      handleVideoCallEnd(socket.id, partnerSocketId);   
-      socket.emit("end-video"); 
-      partnerSocket.emit("end-video");
-    }
+    
+    if (mode === "video") {
+      if (activeVideoCalls.has(`${socket.id}-${partnerSocketId}`) ||
+          activeVideoCalls.has(`${partnerSocketId}-${socket.id}`)) {
+        handleVideoCallEnd(socket.id, partnerSocketId);   
+        socket.emit("end-video"); 
+        if (partnerSocket) {
+          partnerSocket.emit("end-video");
+        }
+      }
 
-    console.log("users will be added to the videoqueue")
-    if (partnerSocket){ 
+      console.log("users will be added to the videoqueue")
+      if (partnerSocket) { 
+        partnerSocket.emit("find other");
+      }
+      
+      activePairs.delete(socket.id);
+      activePairs.delete(partnerSocketId);
+    } 
+    else { 
+      if (partnerSocket) {
+        partnerSocket.emit('disconect', "Partner disconnected.");
+      }
+      socket.emit('disconect', "You disconnected.");
+      console.log("users will be added to the textqueue")
+      if (partnerSocket) {
+        partnerSocket.emit("find other");
+      }
+      
+      activePairs.delete(socket.id);
+      activePairs.delete(partnerSocketId);
+    }
+  }); 
+
+  socket.on('next', (partnerSocketId, mode) => {
+    const partnerSocket = io.sockets.sockets.get(partnerSocketId);
+    
+    if (mode === "video") {
+      if (activeVideoCalls.has(`${socket.id}-${partnerSocketId}`) ||
+          activeVideoCalls.has(`${partnerSocketId}-${socket.id}`)) {
+        handleVideoCallEnd(socket.id, partnerSocketId); 
+      }
+    }
+    
+    if (partnerSocket) {
       partnerSocket.emit("find other");
     }
+    socket.emit("find other");
     
+    // Cleanup connections
     activePairs.delete(socket.id);
     activePairs.delete(partnerSocketId);
-  } 
-  else{ 
-    if (partnerSocket) {
-      partnerSocket.emit('disconect', "Partner disconnected.");
-    }
-    socket.emit('disconect', "You disconnected.");
-    console.log("users will be added to the textqueue")
-    if (partnerSocket) 
-      partnerSocket.emit("find other")
-    
-    activePairs.delete(socket.id);
-    activePairs.delete(partnerSocketId);
+  });
 
-  }} 
-); 
-   socket.on('next', (partnerSocketId, mode) => {
-  const partnerSocket = io.sockets.sockets.get(partnerSocketId);
-  if(mode==="video"){
-  if (
-    activeVideoCalls.has(`${socket.id}-${partnerSocketId}`) ||
-    activeVideoCalls.has(`${partnerSocketId}-${socket.id}`)
-  ) {
-    handleVideoCallEnd(socket.id, partnerSocketId); 
-  }
-
-}
-  if (partnerSocket) {
-    partnerSocket.emit("find other");
-  }
-  socket.emit("find other");
-  
-
-});
   socket.on('disconnect', () => {
     cleanupUserConnections(socket.id);
   });
@@ -136,7 +159,6 @@ export default (io, socket) => {
     const target = io.sockets.sockets.get(toSocketId);
     if (target) {
       target.emit("video-offer", offer, socket.id);
-      activeVideoCalls.add(`${socket.id}-${toSocketId}`);
     }
   });
 
@@ -166,52 +188,76 @@ export default (io, socket) => {
   function cleanupUserConnections(userId) {
     videowaitingUsers.delete(userId); 
     textwaitingUsers.delete(userId);
+    
     const partnerId = activePairs.get(userId);
     if (partnerId) {
       const partnerSocket = io.sockets.sockets.get(partnerId);
       if (partnerSocket) {
         partnerSocket.emit('disconect', "Partner disconnected unexpectedly.");
       }
+      activePairs.delete(userId);
+      activePairs.delete(partnerId);
     }
 
-    for (const callId of activeVideoCalls) {
+    // Cleanup video calls
+    activeVideoCalls.forEach(callId => {
       if (callId.includes(userId)) {
         activeVideoCalls.delete(callId);
       }
-    }
+    });
   }
 
   function handleVideoCallEnd(userId, partnerId) {
     activeVideoCalls.delete(`${userId}-${partnerId}`);
-    activeVideoCalls.delete(`${partnerId}-${userId}`); 
-    activePairs.delete(socket.id);
-    activePairs.delete(partnerId); 
-    const partnerSocket = io.sockets.sockets.get(partnerId); 
-
-    
-  } 
-  function addPastSocket(currentSocketId, pastSocketId) {
-  if (!pastSocketsMap.has(currentSocketId)) {
-    pastSocketsMap.set(currentSocketId, []);
+    activeVideoCalls.delete(`${partnerId}-${userId}`);
+    activePairs.delete(userId);
+    activePairs.delete(partnerId);
   }
 
-  const entry = { id: pastSocketId, addedAt: Date.now() };
-  pastSocketsMap.get(currentSocketId).push(entry);
-  setTimeout(() => {
-    const currentList = pastSocketsMap.get(currentSocketId);
-    if (!currentList) return;
-
-    const updatedList = currentList.filter(e => e.id !== pastSocketId);
-    if (updatedList.length > 0) {
-      pastSocketsMap.set(currentSocketId, updatedList);
-    } else {
-      pastSocketsMap.delete(currentSocketId);
+  function addPastConnection(currentSocketId, pastSocketId) {
+    if (!pastSocketsMap.has(currentSocketId)) {
+      pastSocketsMap.set(currentSocketId, []);
     }
-  }, SOCKET_RETENTION_TIME);
-} 
-function hasnoPastSocket(socketId, targetId) {
-  const entries = pastSocketsMap.get(socketId);
-  if (entries.some(entry => entry.id === targetId)) return false; 
-  return true;
-}
+    
+    const entry = { id: pastSocketId, timestamp: Date.now() };
+    pastSocketsMap.get(currentSocketId).push(entry);
+    
+    // Cleanup old entries after retention time
+    setTimeout(() => {
+      const connections = pastSocketsMap.get(currentSocketId);
+      if (connections) {
+        const updatedConnections = connections.filter(conn => 
+          Date.now() - conn.timestamp < SOCKET_RETENTION_TIME
+        );
+        if (updatedConnections.length > 0) {
+          pastSocketsMap.set(currentSocketId, updatedConnections);
+        } else {
+          pastSocketsMap.delete(currentSocketId);
+        }
+      }
+    }, SOCKET_RETENTION_TIME);
+  }
+
+  function hasPastConnection(socketId1, socketId2) {
+    const connections1 = pastSocketsMap.get(socketId1);
+    const connections2 = pastSocketsMap.get(socketId2);
+    
+    if (connections1) {
+      const recentConnection = connections1.find(conn => 
+        conn.id === socketId2 && 
+        Date.now() - conn.timestamp < SOCKET_RETENTION_TIME
+      );
+      if (recentConnection) return true;
+    }
+    
+    if (connections2) {
+      const recentConnection = connections2.find(conn => 
+        conn.id === socketId1 && 
+        Date.now() - conn.timestamp < SOCKET_RETENTION_TIME
+      );
+      if (recentConnection) return true;
+    }
+    
+    return false;
+  }
 };
